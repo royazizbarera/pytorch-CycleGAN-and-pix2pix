@@ -7,28 +7,26 @@ from . import networks
 
 class CycleGANModel(BaseModel):
     """
-    This class implements a modified CycleGAN model for one-way image-to-image translation (A → B).
+    This class implements a one-way CycleGAN model for learning image-to-image translation in one direction (A -> B).
     """
-
     @staticmethod
     def modify_commandline_options(parser, is_train=True):
+        """Add new dataset-specific options, and rewrite default values for existing options."""
         parser.set_defaults(no_dropout=True)  # default CycleGAN did not use dropout
         if is_train:
             parser.add_argument('--lambda_A', type=float, default=10.0, help='weight for cycle loss (A -> B -> A)')
             parser.add_argument('--lambda_identity', type=float, default=0.5, help='use identity mapping.')
-
         return parser
 
     def __init__(self, opt):
-        """Initialize the modified CycleGAN model."""
+        """Initialize the one-way CycleGAN class."""
         BaseModel.__init__(self, opt)
 
         # Specify the losses to print
-        self.loss_names = ['D_A', 'G_A', 'cycle_A']
+        self.loss_names = ['D_A', 'G_A', 'cycle_A', 'idt_A']
         
         # Specify the images to save/display
-        visual_names_A = ['real_A', 'fake_B', 'rec_A']
-        self.visual_names = visual_names_A  # only for A to B
+        self.visual_names = ['real_A', 'fake_B', 'rec_A']
         
         # Only use G_A and D_A for one-way translation
         if self.isTrain:
@@ -41,16 +39,16 @@ class CycleGANModel(BaseModel):
                                         not opt.no_dropout, opt.init_type, opt.init_gain, self.gpu_ids)
 
         if self.isTrain:
-            self.fake_B_pool = ImagePool(opt.pool_size)
             self.netD_A = networks.define_D(opt.output_nc, opt.ndf, opt.netD,
                                             opt.n_layers_D, opt.norm, opt.init_type, opt.init_gain, self.gpu_ids)
             
             # Define loss functions
+            self.fake_B_pool = ImagePool(opt.pool_size)  # create image buffer to store previously generated images
             self.criterionGAN = networks.GANLoss(opt.gan_mode).to(self.device)
             self.criterionCycle = torch.nn.L1Loss()
             self.criterionIdt = torch.nn.L1Loss() if opt.lambda_identity > 0 else None
             
-            # Optimizers
+            # Initialize optimizers
             self.optimizer_G = torch.optim.Adam(self.netG_A.parameters(), lr=opt.lr, betas=(opt.beta1, 0.999))
             self.optimizer_D = torch.optim.Adam(self.netD_A.parameters(), lr=opt.lr, betas=(opt.beta1, 0.999))
             self.optimizers.append(self.optimizer_G)
@@ -65,7 +63,7 @@ class CycleGANModel(BaseModel):
     def forward(self):
         """Run forward pass; only A -> B translation."""
         self.fake_B = self.netG_A(self.real_A)  # G_A(A)
-        self.rec_A = self.netG_A(self.fake_B)   # G_A(G_A(A)), to calculate cycle loss only for A
+        self.rec_A = self.netG_A(self.fake_B)   # G_A(G_A(A)), for cycle consistency
 
     def backward_D_A(self):
         """Calculate GAN loss for discriminator D_A."""
@@ -74,8 +72,8 @@ class CycleGANModel(BaseModel):
 
     def backward_G(self):
         """Calculate the loss for generator G_A only."""
-        lambda_A = self.opt.lambda_A
         lambda_idt = self.opt.lambda_identity
+        lambda_A = self.opt.lambda_A
 
         # GAN loss D_A(G_A(A))
         self.loss_G_A = self.criterionGAN(self.netD_A(self.fake_B), True)
@@ -96,7 +94,7 @@ class CycleGANModel(BaseModel):
 
     def optimize_parameters(self):
         """Calculate losses, gradients, and update network weights."""
-        # forward
+        # Forward
         self.forward()
         
         # Update G_A
